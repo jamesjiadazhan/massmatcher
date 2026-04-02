@@ -1,0 +1,44 @@
+Package: massmatcher
+Type: Package
+Title: Massmatcher: a comprehensive mass matching tool for untargeted metabolomics
+Version: 1.0.0
+Authors@R: c(
+    person(given = "Jiada", family = "Zhan", middle = "", "jzha832@emory.edu", role = c("aut", "cre"),
+      comment = c(ORCID = "0000-0003-2480-8760")
+    )
+  )
+Maintainer: Jiada (James) Zhan <jzha832@emory.edu>
+Date: 2025-06-16
+Description: Massmatcher curates molecular information from metorigindb,
+    PubChem, HMDB, KEGG, LIPID_MAPS, ChEBI, BioCyc, and DrugBank. The main
+    focus is to annotate unknown m/z values based on theoretical
+    monoisotopic mass and hypothetical adduct forms. After that, three
+    options are offered to users: select only the quantified metabolites,
+    select only the quantified and most abundant metabolites, and include
+    chemical classification information for all annotations.
+Depends: 
+    R (>= 2.10)
+Imports:
+    dplyr,
+    data.table,
+    MetaboCoreUtilsAdduct,
+    arrow,
+    classyfireR,
+    purrr,
+    readr,
+    tidyr,
+    preprocessCore,
+    imputeLCMD
+Suggests:
+    testthat (>= 3.0.0),
+    shiny,
+    bslib,
+    DT
+Remotes:
+    jamesjiadazhan/MetaboCoreUtilsAdduct,
+    aberHRML/classyfireR
+License: MIT
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.2
+Config/testthat/edition: 3
