@@ -6,3 +6,10 @@
 # large local data
 inst/pubchem/*.parquet
 inst/metorigindb/*.parquet
+
+.DS_Store
+**/.DS_Store
+inst/pubchem/*.parquet
+inst/metorigindb/*.parquet
+inst/classyfire/*.parquet
+rsconnect/
