@@ -6,10 +6,15 @@
 #' @return a tibble
 #' @export
 hmdb_concentration_loading <- function() {
-  hmdb_concentration_path <- system.file("concentration", "hmdb_concentrations_normal_condition.csv", package = "massmatcher")
-  if (hmdb_concentration_path == "") {
+  hmdb_concentration_candidates <- massmatcher_inst_file_candidates(
+    "concentration",
+    "hmdb_concentrations_normal_condition.csv"
+  )
+  hmdb_concentration_path <- hmdb_concentration_candidates[file.exists(hmdb_concentration_candidates)][1]
+  if (is.na(hmdb_concentration_path)) {
     stop(
-      "Could not locate hmdb_concentrations_normal_condition.csv in the installed package.",
+      "Could not locate hmdb_concentrations_normal_condition.csv. Checked: ",
+      paste(hmdb_concentration_candidates, collapse = ", "),
       call. = FALSE
     )
   }

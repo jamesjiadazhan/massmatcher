@@ -5,6 +5,117 @@
     x
 }
 
+locate_massmatcher_app_dir <- function() {
+    current_file <- tryCatch(
+        normalizePath(sys.frame(1)$ofile, winslash = "/", mustWork = TRUE),
+        error = function(e) ""
+    )
+
+    app_dir_candidates <- unique(c(
+        if (nzchar(current_file)) dirname(current_file),
+        normalizePath(file.path(getwd(), "inst", "shiny", "massmatcher-app"), winslash = "/", mustWork = FALSE),
+        normalizePath(file.path(getwd(), "massmatcher", "inst", "shiny", "massmatcher-app"), winslash = "/", mustWork = FALSE)
+    ))
+    app_dir_candidates <- app_dir_candidates[dir.exists(app_dir_candidates)]
+    app_dir_candidates[1]
+}
+
+locate_massmatcher_source_root <- function() {
+    current_file <- tryCatch(
+        normalizePath(sys.frame(1)$ofile, winslash = "/", mustWork = TRUE),
+        error = function(e) ""
+    )
+
+    app_dir_candidates <- unique(c(
+        if (nzchar(current_file)) dirname(current_file),
+        normalizePath(file.path(getwd(), "inst", "shiny", "massmatcher-app"), winslash = "/", mustWork = FALSE),
+        normalizePath(file.path(getwd(), "massmatcher", "inst", "shiny", "massmatcher-app"), winslash = "/", mustWork = FALSE),
+        normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+    ))
+    app_dir_candidates <- app_dir_candidates[dir.exists(app_dir_candidates)]
+
+    root_candidates <- unique(unlist(lapply(app_dir_candidates, function(app_dir) {
+        c(
+            normalizePath(file.path(app_dir, "..", "..", ".."), winslash = "/", mustWork = FALSE),
+            normalizePath(file.path(app_dir, "..", "..", "..", "massmatcher"), winslash = "/", mustWork = FALSE),
+            normalizePath(app_dir, winslash = "/", mustWork = FALSE)
+        )
+    }), use.names = FALSE))
+    root_candidates <- root_candidates[dir.exists(root_candidates)]
+
+    for (root in root_candidates) {
+        r_dir <- file.path(root, "R")
+        if (file.exists(file.path(root, "DESCRIPTION")) &&
+            dir.exists(file.path(root, "inst")) &&
+            dir.exists(file.path(root, "data")) &&
+            dir.exists(r_dir) &&
+            length(list.files(r_dir, pattern = "\\.[Rr]$", full.names = TRUE)) > 0) {
+            return(root)
+        }
+    }
+
+    NULL
+}
+
+bootstrap_massmatcher_backend <- function() {
+    source_root <- locate_massmatcher_source_root()
+
+    if (!is.null(source_root)) {
+        options(massmatcher.bundle_root = source_root)
+
+        import_env <- new.env(parent = baseenv())
+        import_packages <- c(
+            "data.table",
+            "MetaboCoreUtilsAdduct",
+            "arrow",
+            "classyfireR",
+            "purrr",
+            "readr",
+            "preprocessCore",
+            "imputeLCMD",
+            "magrittr",
+            "rlang",
+            "tibble",
+            "tidyr",
+            "dplyr"
+        )
+        for (pkg in import_packages) {
+            if (!requireNamespace(pkg, quietly = TRUE)) {
+                next
+            }
+            pkg_exports <- getNamespaceExports(pkg)
+            for (export_name in pkg_exports) {
+                assign(export_name, getExportedValue(pkg, export_name), envir = import_env)
+            }
+        }
+
+        pkg_env <- new.env(parent = import_env)
+        r_files <- sort(list.files(file.path(source_root, "R"), pattern = "\\.[Rr]$", full.names = TRUE))
+        r_files <- r_files[!grepl("/run_massmatcher_app\\.R$", r_files)]
+        for (r_file in r_files) {
+            sys.source(r_file, envir = pkg_env)
+        }
+
+        return(list(mode = "bundle", root = source_root, env = pkg_env))
+    }
+
+    if (requireNamespace("massmatcher", quietly = TRUE)) {
+        return(list(mode = "package", root = NULL, env = NULL))
+    }
+
+    stop("Could not locate the massmatcher source bundle or an installed massmatcher package.")
+}
+
+massmatcher_backend <- bootstrap_massmatcher_backend()
+
+mm_call <- function(name, ...) {
+    if (identical(massmatcher_backend$mode, "bundle")) {
+        return(get(name, envir = massmatcher_backend$env, inherits = FALSE)(...))
+    }
+
+    getExportedValue("massmatcher", name)(...)
+}
+
 DEMO_MZ_MASS_MATCH <- c(160.1332, 176.1282)
 DEMO_MZ_ISOTOPOLOGUE <- c(161.1366, 177.1315)
 DEMO_TARGET_MASS <- c(180.063388, 202.045322)
@@ -184,7 +295,17 @@ coerce_mz_time_columns <- function(table) {
 
 load_demo_feature_table <- function(rows = 500, cols = 12) {
     env <- new.env(parent = emptyenv())
-    data("feature_table_exp_hilicpos", package = "massmatcher", envir = env)
+
+    if (identical(massmatcher_backend$mode, "bundle")) {
+        data_file <- file.path(massmatcher_backend$root, "data", "feature_table_exp_hilicpos.rda")
+        if (!file.exists(data_file)) {
+            stop("Bundled demo data `feature_table_exp_hilicpos` was not found in the deployed source bundle.")
+        }
+        load(data_file, envir = env)
+    } else {
+        data("feature_table_exp_hilicpos", package = "massmatcher", envir = env)
+    }
+
     if (!exists("feature_table_exp_hilicpos", envir = env, inherits = FALSE)) {
         stop("Bundled demo data `feature_table_exp_hilicpos` was not found.")
     }
@@ -256,7 +377,6 @@ prepare_export_table <- function(table) {
 ui <- bslib::page_navbar(
     title = shiny::tags$div(
         style = "display:flex;align-items:center;gap:10px;",
-        shiny::tags$img(src = "massmatcher-logo.svg", height = "34px"),
         shiny::tags$span("massmatcher")
     ),
     theme = bslib::bs_theme(version = 5, bootswatch = "flatly", primary = "#50C878"),
@@ -451,15 +571,7 @@ ui <- bslib::page_navbar(
                 bslib::card_body(
                     fill = FALSE,
                     shiny::textOutput("search_status"),
-                    shiny::tags$div(
-                        style = "max-width:220px;margin-bottom:10px;",
-                        shiny::selectInput(
-                            inputId = "search_group_page_size",
-                            label = "Rows per group page",
-                            choices = c("10", "25", "50", "100"),
-                            selected = "10"
-                        )
-                    ),
+                    shiny::uiOutput("search_group_page_size_ui"),
                     shiny::uiOutput("search_grouped_ui")
                 )
             )
@@ -637,6 +749,7 @@ server <- function(input, output, session) {
     state <- shiny::reactiveValues(
         search_result = NULL,
         search_mode_used = NULL,
+        search_grouping = NULL,
         search_run_stamp = NULL,
         clustering_result = NULL,
         metadata_table = NULL,
@@ -712,7 +825,7 @@ server <- function(input, output, session) {
     available_metadata_biospecimens <- function() {
         biospecimen_choices <- tryCatch(
             {
-                concentration_df <- massmatcher::hmdb_concentration_loading()
+                concentration_df <- mm_call("hmdb_concentration_loading")
                 if (!"Biospecimen" %in% colnames(concentration_df)) {
                     return("Blood")
                 }
@@ -777,18 +890,29 @@ server <- function(input, output, session) {
     }, ignoreInit = TRUE)
 
     parse_text_or_upload_mz <- function(text_value, uploaded_file, context_label) {
+        if (!is.null(uploaded_file)) {
+            return(read_mz_values_from_upload(uploaded_file, context_label = context_label))
+        }
+
         text_value <- trimws(text_value %||% "")
         if (!identical(text_value, "")) {
             return(parse_numeric_values(text_value))
         }
 
-        if (!is.null(uploaded_file)) {
-            return(read_mz_values_from_upload(uploaded_file, context_label = context_label))
-        }
-
         stop(
             "Please enter m/z values (one per line) or upload a file with one column: mz."
         )
+    }
+
+    should_use_search_broad_prefilter <- function(mz_values, adducts, uploaded_file = NULL) {
+        if (!is.null(uploaded_file)) {
+            return(TRUE)
+        }
+
+        mz_count <- length(mz_values %||% numeric(0))
+        adduct_count <- length(adducts %||% character(0))
+
+        isTRUE(mz_count > 10L) || isTRUE(adduct_count > 1L)
     }
 
     detect_search_group_column <- function(df, mode = NULL) {
@@ -823,6 +947,30 @@ server <- function(input, output, session) {
         page_size
     })
 
+    should_group_search_results <- function(mode_used = NULL) {
+        mode_used <- mode_used %||% state$search_mode_used %||% input$search_mode
+        grouping_info <- state$search_grouping
+
+        if (!mode_used %in% c("mass_match", "isotopologue_mass_match")) {
+            return(TRUE)
+        }
+
+        if (is.null(grouping_info)) {
+            return(TRUE)
+        }
+
+        if (isTRUE(grouping_info$uploaded)) {
+            return(FALSE)
+        }
+
+        query_count <- suppressWarnings(as.integer(grouping_info$query_count %||% NA_integer_))
+        if (is.finite(query_count) && query_count > 10L) {
+            return(FALSE)
+        }
+
+        TRUE
+    }
+
     build_search_group_specs <- function() {
         shiny::req(state$search_result)
         df <- as.data.frame(state$search_result, stringsAsFactors = FALSE)
@@ -834,7 +982,7 @@ server <- function(input, output, session) {
         mode_used <- state$search_mode_used %||% input$search_mode
         group_col <- detect_search_group_column(df, mode = mode_used)
 
-        if (is.null(group_col)) {
+        if (is.null(group_col) || !should_group_search_results(mode_used)) {
             return(list(type = "single"))
         }
 
@@ -892,8 +1040,11 @@ server <- function(input, output, session) {
                 context_label = "search upload",
                 require_single_column = TRUE
             )
-            shiny::updateTextAreaInput(session, "search_mz_values", value = mz_values_to_lines(mz_values))
-            state$search_status <- paste0("Loaded ", length(mz_values), " m/z values from uploaded file.")
+            state$search_status <- paste0(
+                "Uploaded file detected with ",
+                length(mz_values),
+                " m/z values. The uploaded file will be used directly for m/z matching."
+            )
         }, silent = TRUE)
     })
 
@@ -904,6 +1055,11 @@ server <- function(input, output, session) {
     shiny::observeEvent(input$run_search, {
         state$search_status <- "Running search..."
         requested_mode <- input$search_mode %||% "mass_match"
+        search_grouping_context <- list(
+            mode = requested_mode,
+            uploaded = FALSE,
+            query_count = NA_integer_
+        )
 
         search_result <- tryCatch(
             {
@@ -923,7 +1079,8 @@ server <- function(input, output, session) {
                         }
                         feature_table <- coerce_mz_time_columns(read_uploaded_table(input$search_target_feature_file))
                         shiny::incProgress(0.4, detail = "Matching target masses")
-                        out <- massmatcher::target_mass_search(
+                        out <- mm_call(
+                            "target_mass_search",
                             mass = target_masses,
                             feature_table = feature_table,
                             adduct = adducts,
@@ -936,13 +1093,37 @@ server <- function(input, output, session) {
                             uploaded_file = input$search_unknown_file,
                             context_label = "search upload"
                         )
+                        search_grouping_context$uploaded <- !is.null(input$search_unknown_file)
+                        search_grouping_context$query_count <- length(unknown_mz)
                         unknown_feature <- mz_values_to_unknown_feature(unknown_mz)
+                        prefiltered_database <- NULL
+                        if (should_use_search_broad_prefilter(
+                            mz_values = unknown_mz,
+                            adducts = adducts,
+                            uploaded_file = input$search_unknown_file
+                        )) {
+                            prefilter_detail <- if (!is.null(input$search_unknown_file)) {
+                                "Broad-prefiltering database for uploaded m/z list"
+                            } else {
+                                "Broad-prefiltering database for multi-m/z/adduct search"
+                            }
+                            shiny::incProgress(0.15, detail = prefilter_detail)
+                            prefiltered_database <- mm_call(
+                                "prefilter_metabolite_database_by_mz_range",
+                                mz_values = unknown_mz,
+                                adducts = adducts,
+                                ppm_threshold = input$search_ppm,
+                                database = input$search_database
+                            )
+                        }
                         shiny::incProgress(0.4, detail = "Running mass_match")
-                        out <- massmatcher::mass_match(
+                        out <- mm_call(
+                            "mass_match",
                             unknown_feature = unknown_feature,
                             mz_ppm = input$search_ppm,
                             adduct = adducts,
-                            database = input$search_database
+                            database = input$search_database,
+                            metabolite_database = prefiltered_database
                         )
                     } else {
                         shiny::incProgress(0.3, detail = "Preparing unknown features")
@@ -951,13 +1132,37 @@ server <- function(input, output, session) {
                             uploaded_file = input$search_unknown_file,
                             context_label = "search upload"
                         )
+                        search_grouping_context$uploaded <- !is.null(input$search_unknown_file)
+                        search_grouping_context$query_count <- length(unknown_mz)
                         unknown_feature <- mz_values_to_unknown_feature(unknown_mz)
+                        prefiltered_database <- NULL
+                        if (should_use_search_broad_prefilter(
+                            mz_values = unknown_mz,
+                            adducts = adducts,
+                            uploaded_file = input$search_unknown_file
+                        )) {
+                            prefilter_detail <- if (!is.null(input$search_unknown_file)) {
+                                "Broad-prefiltering database for uploaded m/z list"
+                            } else {
+                                "Broad-prefiltering database for multi-m/z/adduct search"
+                            }
+                            shiny::incProgress(0.15, detail = prefilter_detail)
+                            prefiltered_database <- mm_call(
+                                "prefilter_metabolite_database_by_mz_range",
+                                mz_values = unknown_mz,
+                                adducts = adducts,
+                                ppm_threshold = input$search_ppm,
+                                database = input$search_database
+                            )
+                        }
                         shiny::incProgress(0.4, detail = "Running isotopologue_mass_match")
-                        out <- massmatcher::isotopologue_mass_match(
+                        out <- mm_call(
+                            "isotopologue_mass_match",
                             unknown_feature = unknown_feature,
                             mz_ppm = input$search_ppm,
                             adduct = adducts,
-                            database = input$search_database
+                            database = input$search_database,
+                            metabolite_database = prefiltered_database
                         )
                     }
                     shiny::incProgress(0.2, detail = "Done")
@@ -973,6 +1178,7 @@ server <- function(input, output, session) {
         if (!is.null(search_result)) {
             state$search_result <- search_result
             state$search_mode_used <- requested_mode
+            state$search_grouping <- search_grouping_context
             state$search_run_stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
             state$search_status <- paste0("Search completed. Rows: ", nrow(search_result))
             session$onFlushed(function() {
@@ -980,6 +1186,7 @@ server <- function(input, output, session) {
             }, once = TRUE)
         } else {
             state$search_result <- NULL
+            state$search_grouping <- NULL
             state$search_status <- "Search failed."
         }
     })
@@ -987,6 +1194,24 @@ server <- function(input, output, session) {
     output$search_table_single <- DT::renderDT({
         shiny::req(state$search_result)
         make_datatable(prepare_export_table(state$search_result))
+    })
+
+    output$search_group_page_size_ui <- shiny::renderUI({
+        specs <- search_group_specs()
+
+        if (!identical(specs$type, "grouped")) {
+            return(NULL)
+        }
+
+        shiny::tags$div(
+            style = "max-width:220px;margin-bottom:10px;",
+            shiny::selectInput(
+                inputId = "search_group_page_size",
+                label = "Rows per group page",
+                choices = c("10", "25", "50", "100"),
+                selected = "10"
+            )
+        )
     })
 
     output$search_grouped_ui <- shiny::renderUI({
@@ -1097,7 +1322,8 @@ server <- function(input, output, session) {
                     }
 
                     if (identical(input$cluster_database, "pubchem")) {
-                        out <- massmatcher::mz_match_clustering_pubchem(
+                        out <- mm_call(
+                            "mz_match_clustering_pubchem",
                             met_raw_wide = feature_table,
                             mz_threshold = input$cluster_mz_threshold,
                             All_Adduct = chosen_adducts,
@@ -1114,7 +1340,8 @@ server <- function(input, output, session) {
                             }
                         )
                     } else {
-                        out <- massmatcher::mz_match_clustering(
+                        out <- mm_call(
+                            "mz_match_clustering",
                             met_raw_wide = feature_table,
                             database = input$cluster_database,
                             mz_threshold = input$cluster_mz_threshold,
@@ -1268,7 +1495,8 @@ server <- function(input, output, session) {
                     animated = TRUE
                 )
 
-                out <- massmatcher::annotate_match_results(
+                out <- mm_call(
+                    "annotate_match_results",
                     result_table = metadata_setup$uploaded,
                     database = metadata_setup$database,
                     biospecimen = metadata_setup$biospecimen,

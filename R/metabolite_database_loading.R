@@ -12,9 +12,7 @@ locate_database_parquet <- function(database = c("metorigindb", "pubchem")) {
   }
 
   candidate_paths <- c(
-    system.file(package_subdir, file_name, package = "massmatcher"),
-    file.path(getwd(), "inst", package_subdir, file_name),
-    file.path(getwd(), "massmatcher", "inst", package_subdir, file_name)
+    massmatcher_inst_file_candidates(package_subdir, file_name)
   )
 
   candidate_paths <- unique(candidate_paths[nzchar(candidate_paths)])
@@ -48,6 +46,17 @@ metabolite_database_loading <- function(database = c("metorigindb", "pubchem")) 
     massmatcher_cache_set(cache_key, dataset)
   }
 
+  dataset_columns <- tryCatch(names(dataset$schema), error = function(e) character())
+  required_exact_columns <- c("Exact_mass", "Exact_mass_most_abundant_isotopologue")
+  missing_exact_columns <- setdiff(required_exact_columns, dataset_columns)
+  if (length(missing_exact_columns) > 0) {
+    stop(
+      "The ", database, " parquet file is missing required exact-mass columns: ",
+      paste(missing_exact_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
   if (identical(database, "metorigindb")) {
     dataset |>
       dplyr::transmute(
@@ -55,6 +64,8 @@ metabolite_database_loading <- function(database = c("metorigindb", "pubchem")) 
         Formula = .data$Formula,
         Mono_mass = .data$Monoisotopic_weight,
         Most_abundant_isotopologue_mass = .data$Most_abundant_isotopologue_mass,
+        Exact_mass = .data$Exact_mass,
+        Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
         InChIKey = .data$INCHIKEY_ID,
         SMILES = .data$SMILES_ID,
         Charge_natural = .data$Charge_natural,
@@ -95,30 +106,108 @@ metabolite_database_loading <- function(database = c("metorigindb", "pubchem")) 
         Mass_diff = .data$Mass_diff
       )
   } else {
-    dataset |>
-      dplyr::transmute(
-        Name = .data$Name,
-        Formula = .data$Formula,
-        Mono_mass = .data$MonoMass,
-        Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
-        InChIKey = .data$InChIKey,
-        InChI = .data$InChI,
-        SMILES = .data$SMILES,
-        Charge_natural = .data$Charge_natural,
-        CID = .data$CID,
-        HMDB_ID = .data$HMDB_ID,
-        KEGG_ID = .data$KEGG_ID,
-        LIPID_MAPS_ID = .data$LIPID_MAPS_ID,
-        ChEBI_ID = .data$ChEBI_ID,
-        BioCyc_ID = .data$BioCyc_ID,
-        DrugBank_ID = .data$DrugBank_ID,
-        Subclass = NA_character_,
-        has_NH3 = FALSE,
-        n_NH3 = 0L,
-        has_H2O = FALSE,
-        n_H2O = 0L,
-        Mass_diff = NA_real_
-      )
+    has_subclass <- "Subclass" %in% dataset_columns
+    has_loss_columns <- all(c("has_NH3", "n_NH3", "has_H2O", "n_H2O") %in% dataset_columns)
+
+    if (has_subclass && has_loss_columns) {
+      dataset |>
+        dplyr::transmute(
+          Name = .data$Name,
+          Formula = .data$Formula,
+          Mono_mass = .data$MonoMass,
+          Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+          Exact_mass = .data$Exact_mass,
+          Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+          InChIKey = .data$InChIKey,
+          InChI = .data$InChI,
+          SMILES = .data$SMILES,
+          Charge_natural = .data$Charge_natural,
+          CID = .data$CID,
+          HMDB_ID = .data$HMDB_ID,
+          KEGG_ID = .data$KEGG_ID,
+          LIPID_MAPS_ID = .data$LIPID_MAPS_ID,
+          ChEBI_ID = .data$ChEBI_ID,
+          BioCyc_ID = .data$BioCyc_ID,
+          DrugBank_ID = .data$DrugBank_ID,
+          Subclass = .data$Subclass,
+          has_NH3 = .data$has_NH3,
+          n_NH3 = .data$n_NH3,
+          has_H2O = .data$has_H2O,
+          n_H2O = .data$n_H2O,
+          Mass_diff = NA_real_
+        )
+    } else if (has_subclass) {
+      dataset |>
+        dplyr::transmute(
+          Name = .data$Name,
+          Formula = .data$Formula,
+          Mono_mass = .data$MonoMass,
+          Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+          Exact_mass = .data$Exact_mass,
+          Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+          InChIKey = .data$InChIKey,
+          InChI = .data$InChI,
+          SMILES = .data$SMILES,
+          Charge_natural = .data$Charge_natural,
+          CID = .data$CID,
+          HMDB_ID = .data$HMDB_ID,
+          KEGG_ID = .data$KEGG_ID,
+          LIPID_MAPS_ID = .data$LIPID_MAPS_ID,
+          ChEBI_ID = .data$ChEBI_ID,
+          BioCyc_ID = .data$BioCyc_ID,
+          DrugBank_ID = .data$DrugBank_ID,
+          Subclass = .data$Subclass,
+          Mass_diff = NA_real_
+        )
+    } else if (has_loss_columns) {
+      dataset |>
+        dplyr::transmute(
+          Name = .data$Name,
+          Formula = .data$Formula,
+          Mono_mass = .data$MonoMass,
+          Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+          Exact_mass = .data$Exact_mass,
+          Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+          InChIKey = .data$InChIKey,
+          InChI = .data$InChI,
+          SMILES = .data$SMILES,
+          Charge_natural = .data$Charge_natural,
+          CID = .data$CID,
+          HMDB_ID = .data$HMDB_ID,
+          KEGG_ID = .data$KEGG_ID,
+          LIPID_MAPS_ID = .data$LIPID_MAPS_ID,
+          ChEBI_ID = .data$ChEBI_ID,
+          BioCyc_ID = .data$BioCyc_ID,
+          DrugBank_ID = .data$DrugBank_ID,
+          has_NH3 = .data$has_NH3,
+          n_NH3 = .data$n_NH3,
+          has_H2O = .data$has_H2O,
+          n_H2O = .data$n_H2O,
+          Mass_diff = NA_real_
+        )
+    } else {
+      dataset |>
+        dplyr::transmute(
+          Name = .data$Name,
+          Formula = .data$Formula,
+          Mono_mass = .data$MonoMass,
+          Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+          Exact_mass = .data$Exact_mass,
+          Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+          InChIKey = .data$InChIKey,
+          InChI = .data$InChI,
+          SMILES = .data$SMILES,
+          Charge_natural = .data$Charge_natural,
+          CID = .data$CID,
+          HMDB_ID = .data$HMDB_ID,
+          KEGG_ID = .data$KEGG_ID,
+          LIPID_MAPS_ID = .data$LIPID_MAPS_ID,
+          ChEBI_ID = .data$ChEBI_ID,
+          BioCyc_ID = .data$BioCyc_ID,
+          DrugBank_ID = .data$DrugBank_ID,
+          Mass_diff = NA_real_
+        )
+    }
   }
 }
 

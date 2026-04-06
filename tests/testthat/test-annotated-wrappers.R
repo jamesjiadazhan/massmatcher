@@ -11,9 +11,16 @@ testthat::test_that("annotate_match_results enriches mass and isotopologue outpu
       .data$Subclass != "",
       .data$Charge_natural == 0,
       !is.na(.data$Mono_mass),
-      !is.na(.data$Most_abundant_isotopologue_mass)
+      !is.na(.data$Most_abundant_isotopologue_mass),
+      !is.na(.data$Exact_mass),
+      !is.na(.data$Exact_mass_most_abundant_isotopologue)
     ) |>
-    dplyr::select(Mono_mass, Most_abundant_isotopologue_mass) |>
+    dplyr::select(
+      Mono_mass,
+      Most_abundant_isotopologue_mass,
+      Exact_mass,
+      Exact_mass_most_abundant_isotopologue
+    ) |>
     utils::head(1) |>
     dplyr::collect()
 
@@ -21,8 +28,8 @@ testthat::test_that("annotate_match_results enriches mass and isotopologue outpu
     testthat::skip("No neutral metorigindb reference molecule available.")
   }
 
-  mono_mz <- massmatcher:::mass2mz_df_safe(ref$Mono_mass[[1]], adduct = "M+H")$mz[[1]]
-  iso_mz <- massmatcher:::mass2mz_df_safe(ref$Most_abundant_isotopologue_mass[[1]], adduct = "M+H")$mz[[1]]
+  mono_mz <- massmatcher:::mass2mz_df_safe(ref$Exact_mass[[1]], adduct = "M+H")$mz[[1]]
+  iso_mz <- massmatcher:::mass2mz_df_safe(ref$Exact_mass_most_abundant_isotopologue[[1]], adduct = "M+H")$mz[[1]]
 
   mono_out <- mass_match(
     unknown_feature = tibble::tibble(mz = mono_mz, time = 1),
@@ -83,6 +90,8 @@ testthat::test_that("annotate_mz_match_clustering_results enriches clustering ou
   synthetic_database <- tibble::tibble(
     Mono_mass = synthetic_masses,
     Most_abundant_isotopologue_mass = synthetic_masses,
+    Exact_mass = synthetic_masses,
+    Exact_mass_most_abundant_isotopologue = synthetic_masses,
     Name = paste0("Synthetic_", seq_along(synthetic_masses)),
     Formula = rep("C6H12O6", length(synthetic_masses)),
     HMDB_ID = rep(NA_character_, length(synthetic_masses)),

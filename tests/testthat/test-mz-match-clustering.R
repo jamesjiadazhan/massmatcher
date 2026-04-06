@@ -16,6 +16,8 @@ testthat::test_that("mz_match_clustering works with feature_table_exp_hilicpos e
   synthetic_database <- tibble::tibble(
     Mono_mass = synthetic_masses,
     Most_abundant_isotopologue_mass = synthetic_masses,
+    Exact_mass = synthetic_masses,
+    Exact_mass_most_abundant_isotopologue = synthetic_masses,
     Name = paste0("Synthetic_", seq_along(synthetic_masses)),
     Formula = rep("C6H12O6", length(synthetic_masses)),
     HMDB_ID = rep(NA_character_, length(synthetic_masses)),
@@ -50,6 +52,10 @@ testthat::test_that("mz_match_clustering works with feature_table_exp_hilicpos e
   testthat::expect_false("CID" %in% colnames(result$mz_only_isotope))
   testthat::expect_false("CID" %in% colnames(result$clustering_all))
   testthat::expect_false("CID" %in% colnames(result$clustering_main))
+  testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(result$mz_only)))
+  testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(result$mz_only_isotope)))
+  testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(result$clustering_all)))
+  testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(result$clustering_main)))
   testthat::expect_lt(
     match("theoretical_mz", colnames(result$mz_only)),
     match("mz_matching_ppm", colnames(result$mz_only))

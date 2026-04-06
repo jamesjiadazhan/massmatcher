@@ -15,10 +15,11 @@
 #'   `mz`, the second column must be `time`, and the remaining columns are sample
 #'   intensities.
 #' @param metabolite_database Optional metabolite database with the columns
-#'   `Mono_mass`, `Most_abundant_isotopologue_mass`, `Name`, `Formula`,
-#'   `HMDB_ID`, `KEGG_ID`, `InChIKey`, `Subclass`, `has_NH3`, `has_H2O`,
-#'   `n_NH3`, and `n_H2O`. When `NULL`, the database specified by `database` is
-#'   loaded automatically.
+#'   `Mono_mass`, `Most_abundant_isotopologue_mass`, `Exact_mass`,
+#'   `Exact_mass_most_abundant_isotopologue`, `Name`, `Formula`, `HMDB_ID`,
+#'   `KEGG_ID`, `InChIKey`, `Subclass`, `has_NH3`, `has_H2O`, `n_NH3`, and
+#'   `n_H2O`. When `NULL`, the database specified by `database` is loaded
+#'   automatically.
 #' @param database Database used when `metabolite_database` is `NULL`. Choose
 #'   either `"metorigindb"` or `"pubchem"`. Default is `"metorigindb"`.
 #' @param hmdb_concentration Optional HMDB concentration table. If `NULL`, the
@@ -84,7 +85,7 @@ mz_match_clustering <- function(
     progress_bar <- NULL
 
     if (isTRUE(show_progress)) {
-        progress_bar <- txtProgressBar(min = 0, max = total_progress_steps, style = 3)
+        progress_bar <- utils::txtProgressBar(min = 0, max = total_progress_steps, style = 3)
         on.exit(close(progress_bar), add = TRUE)
     }
 
@@ -97,7 +98,7 @@ mz_match_clustering <- function(
             if (isTRUE(announce)) {
                 message("[", round(current_progress_step, 2), "/", total_progress_steps, "] ", detail)
             }
-            setTxtProgressBar(progress_bar, current_progress_step)
+            utils::setTxtProgressBar(progress_bar, current_progress_step)
         }
         if (is.function(progress_callback)) {
             try(progress_callback(current_progress_step, total_progress_steps, detail), silent = TRUE)
@@ -135,6 +136,30 @@ mz_match_clustering <- function(
         )
     }
 
+    estimate_neutral_mass_range <- function(mz_values, adducts, ppm_threshold) {
+        adduct_definition <- adduct_definition_loading() |>
+            dplyr::filter(.data$name %in% adducts) |>
+            dplyr::select(name, mass_multi, mass_add)
+
+        if (nrow(adduct_definition) == 0) {
+            stop("None of the selected adducts are available in adduct_definition.", call. = FALSE)
+        }
+
+        ppm_margin <- max(ppm_threshold, 0) / 1000000
+        mz_lower <- min(mz_values) * (1 - ppm_margin)
+        mz_upper <- max(mz_values) * (1 + ppm_margin)
+
+        mass_at_mz_lower <- (mz_lower - adduct_definition$mass_add) / adduct_definition$mass_multi
+        mass_at_mz_upper <- (mz_upper - adduct_definition$mass_add) / adduct_definition$mass_multi
+        lower_candidates <- pmin(mass_at_mz_lower, mass_at_mz_upper)
+        upper_candidates <- pmax(mass_at_mz_lower, mass_at_mz_upper)
+
+        lower <- min(lower_candidates, na.rm = TRUE) - 1.01
+        upper <- max(upper_candidates, na.rm = TRUE) + 1.01
+
+        list(lower = lower, upper = upper)
+    }
+
     compound_identifier_columns <- c(
         "unique_identifier", "InChIKey", "SMILES"
     )
@@ -147,6 +172,7 @@ mz_match_clustering <- function(
         "WIKIPEDIA_ID", "METLIN_ID", "T3DB_ID", "REACTOME_ID",
         "MODELSEED_ID", "MIMEDB_ID", "LOTUS_ID"
     )
+    exact_mass_columns <- c("Exact_mass", "Exact_mass_most_abundant_isotopologue")
     annotation_detail_columns <- c(
         "Name", "Formula", "Mono_mass", "Most_abundant_isotopologue_mass",
         "Charge_natural", "Subclass",
@@ -187,7 +213,8 @@ mz_match_clustering <- function(
                     "mz_matching_ppm", "Adduct", "isotope", "mean_intensity"
                 )),
                 dplyr::any_of(annotation_detail_columns),
-                dplyr::everything()
+                dplyr::everything(),
+                -dplyr::any_of(exact_mass_columns)
             ) |>
             dplyr::relocate(dplyr::any_of("theoretical_mz"), .before = dplyr::any_of("mz_matching_ppm"))
     }
@@ -345,6 +372,12 @@ mz_match_clustering <- function(
     }
     colnames(met_raw_wide)[1:2] <- c("mz", "time")
 
+    mz_values <- suppressWarnings(as.numeric(met_raw_wide$mz))
+    mz_values <- mz_values[is.finite(mz_values)]
+    if (length(mz_values) == 0) {
+        stop("No finite mz values found in met_raw_wide.", call. = FALSE)
+    }
+
     if (is.null(metabolite_database)) {
         report_progress(paste0("Loading ", database, " database..."))
     } else {
@@ -352,12 +385,27 @@ mz_match_clustering <- function(
     }
 
     if (is.null(metabolite_database)) {
+        neutral_mass_range <- estimate_neutral_mass_range(
+            mz_values = mz_values,
+            adducts = All_Adduct,
+            ppm_threshold = mz_threshold
+        )
+
         metabolite_database <- metabolite_database_loading(database = database) |>
+            dplyr::filter(
+                (.data$Exact_mass >= neutral_mass_range$lower & .data$Exact_mass <= neutral_mass_range$upper) |
+                    (
+                        .data$Exact_mass_most_abundant_isotopologue >= neutral_mass_range$lower &
+                            .data$Exact_mass_most_abundant_isotopologue <= neutral_mass_range$upper
+                    )
+            ) |>
             dplyr::collect()
     }
 
     required_metabolite_columns <- c(
-        "Mono_mass", "Most_abundant_isotopologue_mass", "Name", "Formula",
+        "Mono_mass", "Most_abundant_isotopologue_mass",
+        "Exact_mass", "Exact_mass_most_abundant_isotopologue",
+        "Name", "Formula",
         "HMDB_ID", "KEGG_ID", "InChIKey", "Subclass", "has_NH3", "has_H2O",
         "n_NH3", "n_H2O"
     )
@@ -397,11 +445,11 @@ mz_match_clustering <- function(
         )
 
     metabolite_mz_library$mz <- mass2mz_df_safe(
-        mass = metabolite_mz_library$Mono_mass,
+        mass = metabolite_mz_library$Exact_mass,
         adduct = metabolite_mz_library$Adduct
     )$mz
     metabolite_mz_library$mz_isotope <- mass2mz_df_safe(
-        mass = metabolite_mz_library$Most_abundant_isotopologue_mass,
+        mass = metabolite_mz_library$Exact_mass_most_abundant_isotopologue,
         adduct = metabolite_mz_library$Adduct
     )$mz
     metabolite_mz_library <- metabolite_mz_library |>
@@ -717,7 +765,7 @@ mz_match_clustering <- function(
         dplyr::mutate(identification_type_annotated = "identified") |>
         dplyr::rename(Confirmed_Name = Name) |>
         dplyr::select(
-            Mono_mass, InChIKey, identification_type_annotated,
+            Exact_mass, Mono_mass, InChIKey, identification_type_annotated,
             ion_mode, Confirmed_Name, Adduct, mz_sample,
             time_sample, mz_time_sample
         ) |>
@@ -740,7 +788,7 @@ mz_match_clustering <- function(
         dplyr::mutate(identification_type_annotated = "identified") |>
         dplyr::rename(Confirmed_Name = Name) |>
         dplyr::select(
-            Mono_mass, InChIKey, identification_type_annotated,
+            Exact_mass, Mono_mass, InChIKey, identification_type_annotated,
             ion_mode, Confirmed_Name, Adduct, mz_sample_isotope,
             time_sample_isotope, mz_time_sample_isotope
         ) |>
@@ -753,12 +801,12 @@ mz_match_clustering <- function(
         dplyr::mutate(Mono_mass = round(.data$Mono_mass, 4))
 
     met_raw_wide_final_monomass_simple <- met_raw_wide_final_monomass |>
-        dplyr::arrange(.data$Adduct_annotated, .data$Mono_mass) |>
+        dplyr::arrange(.data$Adduct_annotated, .data$Exact_mass) |>
         dplyr::select(-InChIKey, -Confirmed_Name) |>
         dplyr::distinct()
 
     met_raw_wide_final_monomass_isotope_simple <- met_raw_wide_final_monomass_isotope |>
-        dplyr::arrange(.data$Adduct_annotated, .data$Mono_mass) |>
+        dplyr::arrange(.data$Adduct_annotated, .data$Exact_mass) |>
         dplyr::select(-InChIKey, -Confirmed_Name) |>
         dplyr::distinct()
 
@@ -768,10 +816,10 @@ mz_match_clustering <- function(
     if (is.function(progress_callback)) {
         try(progress_callback(current_progress_step, total_progress_steps, "Running clustering..."), silent = TRUE)
     }
-    data_split_cluster <- split(met_raw_wide_final_monomass_simple, met_raw_wide_final_monomass_simple$Mono_mass)
+    data_split_cluster <- split(met_raw_wide_final_monomass_simple, met_raw_wide_final_monomass_simple$Exact_mass)
 
     bayesian_probability_calculation_cluster <- function(data) {
-        current_monomass <- unique(data$Mono_mass)
+        current_exact_mass <- unique(data$Exact_mass)
 
         find_high_correlation_pairs <- function(cor_matrix, threshold) {
             cor_matrix[lower.tri(cor_matrix)] <- NA
@@ -850,14 +898,14 @@ mz_match_clustering <- function(
         }
 
         data_adduct_corr_2 <- data_adduct_corr |>
-            dplyr::distinct(.data$Mono_mass, .data$Adduct_annotated, .data$mz_annotated, .data$time_annotated, .keep_all = TRUE) |>
+            dplyr::distinct(.data$Exact_mass, .data$Adduct_annotated, .data$mz_annotated, .data$time_annotated, .keep_all = TRUE) |>
             dplyr::mutate(adduct_corr_cluster = ifelse(!is.na(.data$adduct_corr_cluster), TRUE, NA))
 
         abundance_ratios <- data.frame()
         primary_df <- met_raw_wide_final_monomass_simple |>
-            dplyr::filter(.data$Mono_mass %in% current_monomass)
+            dplyr::filter(.data$Exact_mass %in% current_exact_mass)
         isotope_df <- met_raw_wide_final_monomass_isotope_simple |>
-            dplyr::filter(.data$Mono_mass %in% current_monomass)
+            dplyr::filter(.data$Exact_mass %in% current_exact_mass)
 
         if (nrow(isotope_df) == 0) {
             data_adduct_corr_3 <- data_adduct_corr_2 |>
@@ -883,7 +931,7 @@ mz_match_clustering <- function(
                     ratios <- 2^(isotope_adduct_intensity - primary_adduct_intensity)
 
                     result_df <- data.frame(
-                        current_monomass = current_monomass,
+                        current_exact_mass = current_exact_mass,
                         mz_primary = current_primary_df$mz_annotated,
                         time_primary = current_primary_df$time_annotated,
                         mz_isotope = current_isotope_df$mz_annotated,
@@ -910,7 +958,7 @@ mz_match_clustering <- function(
 
                 abundance_ratios_4 <- abundance_ratios_2 |>
                     dplyr::group_by(
-                        .data$current_monomass, .data$mz_primary, .data$time_primary,
+                        .data$current_exact_mass, .data$mz_primary, .data$time_primary,
                         .data$mz_isotope, .data$time_isotope, .data$Adduct
                     ) |>
                     dplyr::mutate(
@@ -938,7 +986,7 @@ mz_match_clustering <- function(
                         dplyr::transmute(
                             mz_primary = round(.data$mz_primary, 4),
                             time_primary = round(.data$time_primary, 0),
-                            current_monomass = .data$current_monomass,
+                            current_exact_mass = .data$current_exact_mass,
                             mz_isotope = .data$mz_isotope,
                             time_isotope = .data$time_isotope,
                             Adduct = .data$Adduct,
@@ -954,7 +1002,7 @@ mz_match_clustering <- function(
                             by = c(
                                 "mz_annotated" = "mz_primary",
                                 "time_annotated" = "time_primary",
-                                "Mono_mass" = "current_monomass",
+                                "Exact_mass" = "current_exact_mass",
                                 "Adduct_annotated" = "Adduct"
                             )
                         ) |>
@@ -970,7 +1018,7 @@ mz_match_clustering <- function(
         }
 
         data_adduct_corr_3 <- data_adduct_corr_3 |>
-            dplyr::distinct(.data$Mono_mass, .data$Adduct_annotated, .data$mz_annotated, .data$time_annotated, .keep_all = TRUE)
+            dplyr::distinct(.data$Exact_mass, .data$Adduct_annotated, .data$mz_annotated, .data$time_annotated, .keep_all = TRUE)
 
         if (all(is.na(data_adduct_corr_3$adduct_corr_cluster)) && all(is.na(data_adduct_corr_3$mz_isotope))) {
             return(data.frame())
@@ -993,7 +1041,7 @@ mz_match_clustering <- function(
         }
 
         data_adduct_corr_3 <- data_adduct_corr_3 |>
-            dplyr::distinct(.data$Mono_mass, .data$mz_time_annotated, .keep_all = TRUE)
+            dplyr::distinct(.data$Exact_mass, .data$mz_time_annotated, .keep_all = TRUE)
 
         if (nrow(data_adduct_corr_3) == 1) {
             return(data_adduct_corr_3 |>
@@ -1092,6 +1140,7 @@ mz_match_clustering <- function(
 
     if (nrow(final_results_cluster) == 0 && ncol(final_results_cluster) == 0) {
         final_results_cluster <- dplyr::tibble(
+            Exact_mass = numeric(),
             Mono_mass = numeric(),
             identification_type_annotated = character(),
             ion_mode = character(),
@@ -1147,11 +1196,13 @@ mz_match_clustering <- function(
 
     metabolite_database_simple <- metabolite_database |>
         dplyr::mutate(
+            Exact_mass = round(.data$Exact_mass, 8),
             Mono_mass = round(.data$Mono_mass, 4),
             Name = clean_name(.data$Name),
             Most_abundant_isotopologue_mass = round(.data$Most_abundant_isotopologue_mass, 4)
         ) |>
         dplyr::select(
+            Exact_mass,
             Mono_mass,
             Name,
             Formula,
@@ -1168,7 +1219,9 @@ mz_match_clustering <- function(
         dplyr::distinct()
 
     final_results_cluster_all <- final_results_cluster |>
-        dplyr::inner_join(metabolite_database_simple, by = "Mono_mass") |>
+        dplyr::mutate(Exact_mass = round(.data$Exact_mass, 8)) |>
+        dplyr::select(-dplyr::any_of("Mono_mass")) |>
+        dplyr::inner_join(metabolite_database_simple, by = "Exact_mass") |>
         dplyr::left_join(hmdb_metabolites_concentrations_average_simple, by = "InChIKey") |>
         dplyr::select(
             dplyr::any_of(c(
@@ -1184,7 +1237,8 @@ mz_match_clustering <- function(
                 "Concentration_average", "Concentration_units",
                 "has_NH3", "has_H2O", "n_NH3", "n_H2O"
             )),
-            dplyr::everything()
+            dplyr::everything(),
+            -dplyr::any_of(exact_mass_columns)
         ) |>
         drop_feature_intensity_columns(feature_intensity_columns)
 
@@ -1199,7 +1253,9 @@ mz_match_clustering <- function(
         )
 
     final_results_cluster_identified_2 <- final_results_cluster_identified |>
-        dplyr::inner_join(metabolite_database_simple, by = "Mono_mass") |>
+        dplyr::mutate(Exact_mass = round(.data$Exact_mass, 8)) |>
+        dplyr::select(-dplyr::any_of("Mono_mass")) |>
+        dplyr::inner_join(metabolite_database_simple, by = "Exact_mass") |>
         dplyr::left_join(hmdb_metabolites_concentrations_average_simple, by = "InChIKey") |>
         dplyr::filter(
             (.data$Adduct_annotated == "M+H-NH3" & .data$has_NH3 == TRUE) |
@@ -1240,7 +1296,8 @@ mz_match_clustering <- function(
                 "identification_method", "Concentration_average",
                 "Concentration_units", "Probability", "match_category"
             )),
-            dplyr::everything()
+            dplyr::everything(),
+            -dplyr::any_of(exact_mass_columns)
         ) |>
         dplyr::filter(!is.na(.data$InChIKey)) |>
         dplyr::mutate(

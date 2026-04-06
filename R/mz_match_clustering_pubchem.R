@@ -47,12 +47,21 @@ mz_match_clustering_pubchem <- function(
 
     adduct_allowed_by_formula <- function(data, adduct) {
         if (identical(adduct, "M+H-NH3")) {
+            if (!"has_NH3" %in% colnames(data)) {
+                return(rep(FALSE, nrow(data)))
+            }
             return(data$has_NH3 %in% TRUE)
         }
         if (adduct %in% c("M-H2O+H", "M+H-H2O", "M-H2O-H", "M-H-H2O")) {
+            if (!"n_H2O" %in% colnames(data)) {
+                return(rep(FALSE, nrow(data)))
+            }
             return(data$n_H2O >= 1)
         }
         if (adduct %in% c("M-2H2O+H", "M+H-2H2O")) {
+            if (!"n_H2O" %in% colnames(data)) {
+                return(rep(FALSE, nrow(data)))
+            }
             return(data$n_H2O >= 2)
         }
 
@@ -149,34 +158,101 @@ mz_match_clustering_pubchem <- function(
             massmatcher_cache_set(dataset_key, dataset)
         }
 
-        pubchem_prefiltered <- dataset |>
-            dplyr::transmute(
-                Name = .data$Name,
-                Formula = .data$Formula,
-                Mono_mass = .data$MonoMass,
-                Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
-                InChIKey = .data$InChIKey,
-                CID = .data$CID,
-                HMDB_ID = .data$HMDB_ID,
-                KEGG_ID = .data$KEGG_ID
-            ) |>
+        dataset_columns <- tryCatch(names(dataset$schema), error = function(e) character())
+        required_exact_columns <- c("Exact_mass", "Exact_mass_most_abundant_isotopologue")
+        missing_exact_columns <- setdiff(required_exact_columns, dataset_columns)
+        if (length(missing_exact_columns) > 0) {
+            stop(
+                "The pubchem parquet file is missing required exact-mass columns: ",
+                paste(missing_exact_columns, collapse = ", "),
+                call. = FALSE
+            )
+        }
+        has_subclass <- "Subclass" %in% dataset_columns
+        has_loss_columns <- all(c("has_NH3", "n_NH3", "has_H2O", "n_H2O") %in% dataset_columns)
+
+        pubchem_prefiltered <- if (has_subclass && has_loss_columns) {
+            dataset |>
+                dplyr::transmute(
+                    Name = .data$Name,
+                    Formula = .data$Formula,
+                    Mono_mass = .data$MonoMass,
+                    Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+                    Exact_mass = .data$Exact_mass,
+                    Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+                    InChIKey = .data$InChIKey,
+                    CID = .data$CID,
+                    HMDB_ID = .data$HMDB_ID,
+                    KEGG_ID = .data$KEGG_ID,
+                    Subclass = .data$Subclass,
+                    has_NH3 = .data$has_NH3,
+                    n_NH3 = .data$n_NH3,
+                    has_H2O = .data$has_H2O,
+                    n_H2O = .data$n_H2O,
+                    Mass_diff = NA_real_
+                )
+        } else if (has_subclass) {
+            dataset |>
+                dplyr::transmute(
+                    Name = .data$Name,
+                    Formula = .data$Formula,
+                    Mono_mass = .data$MonoMass,
+                    Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+                    Exact_mass = .data$Exact_mass,
+                    Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+                    InChIKey = .data$InChIKey,
+                    CID = .data$CID,
+                    HMDB_ID = .data$HMDB_ID,
+                    KEGG_ID = .data$KEGG_ID,
+                    Subclass = .data$Subclass,
+                    Mass_diff = NA_real_
+                )
+        } else if (has_loss_columns) {
+            dataset |>
+                dplyr::transmute(
+                    Name = .data$Name,
+                    Formula = .data$Formula,
+                    Mono_mass = .data$MonoMass,
+                    Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+                    Exact_mass = .data$Exact_mass,
+                    Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+                    InChIKey = .data$InChIKey,
+                    CID = .data$CID,
+                    HMDB_ID = .data$HMDB_ID,
+                    KEGG_ID = .data$KEGG_ID,
+                    has_NH3 = .data$has_NH3,
+                    n_NH3 = .data$n_NH3,
+                    has_H2O = .data$has_H2O,
+                    n_H2O = .data$n_H2O,
+                    Mass_diff = NA_real_
+                )
+        } else {
+            dataset |>
+                dplyr::transmute(
+                    Name = .data$Name,
+                    Formula = .data$Formula,
+                    Mono_mass = .data$MonoMass,
+                    Most_abundant_isotopologue_mass = .data$most_abundant_isotopologue_mass,
+                    Exact_mass = .data$Exact_mass,
+                    Exact_mass_most_abundant_isotopologue = .data$Exact_mass_most_abundant_isotopologue,
+                    InChIKey = .data$InChIKey,
+                    CID = .data$CID,
+                    HMDB_ID = .data$HMDB_ID,
+                    KEGG_ID = .data$KEGG_ID,
+                    Mass_diff = NA_real_
+                )
+        }
+
+        pubchem_prefiltered <- pubchem_prefiltered |>
             dplyr::filter(
-                (.data$Mono_mass >= neutral_mass_lower & .data$Mono_mass <= neutral_mass_upper) |
+                (.data$Exact_mass >= neutral_mass_lower & .data$Exact_mass <= neutral_mass_upper) |
                     (
-                        .data$Most_abundant_isotopologue_mass >= neutral_mass_lower &
-                            .data$Most_abundant_isotopologue_mass <= neutral_mass_upper
+                        .data$Exact_mass_most_abundant_isotopologue >= neutral_mass_lower &
+                            .data$Exact_mass_most_abundant_isotopologue <= neutral_mass_upper
                     )
             ) |>
             dplyr::collect() |>
-            dplyr::mutate(
-                Subclass = NA_character_,
-                has_NH3 = FALSE,
-                n_NH3 = 0L,
-                has_H2O = FALSE,
-                n_H2O = 0L,
-                Mass_diff = NA_real_
-            ) |>
-            dplyr::filter(!is.na(.data$Mono_mass), is.finite(.data$Mono_mass)) |>
+            dplyr::filter(!is.na(.data$Exact_mass), is.finite(.data$Exact_mass)) |>
             dplyr::distinct(.data$InChIKey, .keep_all = TRUE)
 
         massmatcher_cache_set(cache_key, pubchem_prefiltered)
@@ -200,7 +276,7 @@ mz_match_clustering_pubchem <- function(
 
             db_sub <- pubchem_prefiltered[keep_idx, , drop = FALSE]
 
-            mono_mz <- mass2mz_df_safe(mass = db_sub$Mono_mass, adduct = adduct_name)$mz
+            mono_mz <- mass2mz_df_safe(mass = db_sub$Exact_mass, adduct = adduct_name)$mz
             mono_keep <- which(is.finite(mono_mz))
             if (length(mono_keep) > 0) {
                 mono_overlap <- find.Overlapping.mzs(
@@ -213,9 +289,9 @@ mz_match_clustering_pubchem <- function(
                 }
             }
 
-            if (any(is.finite(db_sub$Most_abundant_isotopologue_mass))) {
+            if (any(is.finite(db_sub$Exact_mass_most_abundant_isotopologue))) {
                 iso_mz <- mass2mz_df_safe(
-                    mass = db_sub$Most_abundant_isotopologue_mass,
+                    mass = db_sub$Exact_mass_most_abundant_isotopologue,
                     adduct = adduct_name
                 )$mz
                 iso_keep <- which(is.finite(iso_mz))

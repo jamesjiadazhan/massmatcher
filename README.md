@@ -317,7 +317,7 @@ classification by InChIKey (without concentration joins).
 
 - Database-backed functions use `"metorigindb"` by default.
 - Multiple adducts can be supplied as vectors (for example `c("M+H", "M+Na")`).
-- `mass_filter()` and `isotopologue_mass_filter()` are internal helper filters for candidate preselection and are intentionally broad; use `mass_match()` and `isotopologue_mass_match()` for final matching.
+- `mass_match()` and `isotopologue_mass_match()` use a broad exact-mass database prefilter followed by exact ppm overlap matching.
 - Matching quality depends on ion mode, adduct assumptions, and ppm threshold.
 - The package bundles large parquet reference files; keep them inside the package structure for standalone use.
 

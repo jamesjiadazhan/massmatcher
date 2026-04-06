@@ -34,7 +34,7 @@ target_mass_search <- function(mass, feature_table, adduct = c("M+H"), mz_ppm = 
     }
 
     # crossing the mass and adduct
-    mass_candidate = crossing(mass, adduct)
+    mass_candidate = tidyr::crossing(mass, adduct)
 
     # calculate the theoretical m/z values 
     mass_candidate_mz = mass2mz_df_safe(mass = mass_candidate$mass, adduct = mass_candidate$adduct)
@@ -50,13 +50,13 @@ target_mass_search <- function(mass, feature_table, adduct = c("M+H"), mz_ppm = 
     # find the overlapping mz within the specified m/z ppm threshold
     masteroverlap.mass_candidate = find.Overlapping.mzs(mz, mass_candidate_mz, mz.thresh = mz_ppm)
     # select the matched mz in the feature table
-    mz_matched = slice(feature_table, masteroverlap.mass_candidate$index.A)
+    mz_matched = dplyr::slice(feature_table, masteroverlap.mass_candidate$index.A)
     # select the matched mass candidate
-    mass_candidate_matched = slice(mass_candidate, masteroverlap.mass_candidate$index.B)
+    mass_candidate_matched = dplyr::slice(mass_candidate, masteroverlap.mass_candidate$index.B)
     # combine the mz_matched and mass_candidate_matched into a data frame
     mass_candidate_matched_final = cbind(mass_candidate_matched, mz_matched)
     # convert the mass_candidate_matched_final to a tibble
-    mass_candidate_matched_final = tibble(mass_candidate_matched_final)
+    mass_candidate_matched_final = tibble::as_tibble(mass_candidate_matched_final)
     # calculate the absolute mz ppm difference between the mz and theoretical_mz
     mass_candidate_matched_final$mz_ppm = abs((mass_candidate_matched_final$mz - mass_candidate_matched_final$theoretical_mz) / mass_candidate_matched_final$theoretical_mz * 1000000)
     # round the mz_ppm to 2 decimal places

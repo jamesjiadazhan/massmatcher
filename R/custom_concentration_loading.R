@@ -6,10 +6,15 @@
 #' @return a tibble
 #' @export
 custom_concentration_loading <- function() {
-  custom_concentration_path <- system.file("concentration", "custom_concentrations.csv", package = "massmatcher")
-  if (custom_concentration_path == "") {
+  custom_concentration_candidates <- massmatcher_inst_file_candidates(
+    "concentration",
+    "custom_concentrations.csv"
+  )
+  custom_concentration_path <- custom_concentration_candidates[file.exists(custom_concentration_candidates)][1]
+  if (is.na(custom_concentration_path)) {
     stop(
-      "Could not locate custom_concentrations.csv in the installed package.",
+      "Could not locate custom_concentrations.csv. Checked: ",
+      paste(custom_concentration_candidates, collapse = ", "),
       call. = FALSE
     )
   }

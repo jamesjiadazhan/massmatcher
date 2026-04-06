@@ -13,6 +13,16 @@ testthat::test_that("database loaders support metorigindb and pubchem", {
 
   testthat::expect_true("Compound_name" %in% metorigindb_cols)
   testthat::expect_true("Name" %in% pubchem_cols)
+  testthat::expect_true(all(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(
+    massmatcher:::metabolite_database_loading(database = "metorigindb") |>
+      utils::head(0) |>
+      dplyr::collect()
+  )))
+  testthat::expect_true(all(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(
+    massmatcher:::metabolite_database_loading(database = "pubchem") |>
+      utils::head(0) |>
+      dplyr::collect()
+  )))
 })
 
 testthat::test_that("database-backed functions default to metorigindb", {
@@ -25,9 +35,10 @@ testthat::test_that("database-backed functions default to metorigindb", {
     dplyr::filter(
       !is.na(.data$InChIKey),
       .data$Charge_natural == 0,
-      !is.na(.data$Mono_mass)
+      !is.na(.data$Mono_mass),
+      !is.na(.data$Exact_mass)
     ) |>
-    dplyr::select(InChIKey, Mono_mass) |>
+    dplyr::select(InChIKey, Mono_mass, Exact_mass) |>
     utils::head(1) |>
     dplyr::collect()
 
@@ -36,21 +47,10 @@ testthat::test_that("database-backed functions default to metorigindb", {
   }
 
   mono_mz <- massmatcher:::mass2mz_df_safe(
-    mass = reference$Mono_mass[[1]],
+    mass = reference$Exact_mass[[1]],
     adduct = "M+H"
   )$mz[[1]]
   ref_key <- toupper(trimws(reference$InChIKey[[1]]))
-
-  default_candidates <- mass_filter(mz = mono_mz, mz_ppm = 10, adduct = "M+H")
-  explicit_candidates <- mass_filter(
-    mz = mono_mz,
-    mz_ppm = 10,
-    adduct = "M+H",
-    database = "metorigindb"
-  )
-
-  testthat::expect_true(any(toupper(trimws(default_candidates$InChIKey)) == ref_key))
-  testthat::expect_true(any(toupper(trimws(explicit_candidates$InChIKey)) == ref_key))
 
   default_class <- get_chemical_classification(
     unique_inchikey = reference$InChIKey,
@@ -78,9 +78,17 @@ testthat::test_that("mass and isotopologue matching functions work for both data
         !is.na(.data$InChIKey),
         .data$Charge_natural == 0,
         !is.na(.data$Mono_mass),
-        !is.na(.data$Most_abundant_isotopologue_mass)
+        !is.na(.data$Most_abundant_isotopologue_mass),
+        !is.na(.data$Exact_mass),
+        !is.na(.data$Exact_mass_most_abundant_isotopologue)
       ) |>
-      dplyr::select(InChIKey, Mono_mass, Most_abundant_isotopologue_mass) |>
+      dplyr::select(
+        InChIKey,
+        Mono_mass,
+        Most_abundant_isotopologue_mass,
+        Exact_mass,
+        Exact_mass_most_abundant_isotopologue
+      ) |>
       utils::head(1) |>
       dplyr::collect()
 
@@ -90,22 +98,13 @@ testthat::test_that("mass and isotopologue matching functions work for both data
 
     ref_key <- toupper(trimws(reference$InChIKey[[1]]))
     mono_mz <- massmatcher:::mass2mz_df_safe(
-      mass = reference$Mono_mass[[1]],
+      mass = reference$Exact_mass[[1]],
       adduct = "M+H"
     )$mz[[1]]
     isotopologue_mz <- massmatcher:::mass2mz_df_safe(
-      mass = reference$Most_abundant_isotopologue_mass[[1]],
+      mass = reference$Exact_mass_most_abundant_isotopologue[[1]],
       adduct = "M+H"
     )$mz[[1]]
-
-    mass_candidates <- mass_filter(
-      mz = mono_mz,
-      mz_ppm = 10,
-      adduct = "M+H",
-      database = database_name
-    )
-    testthat::expect_true(nrow(mass_candidates) > 0)
-    testthat::expect_true(any(toupper(trimws(mass_candidates$InChIKey)) == ref_key))
 
     mass_matches <- mass_match(
       unknown_feature = tibble::tibble(mz = mono_mz, time = 1),
@@ -115,15 +114,7 @@ testthat::test_that("mass and isotopologue matching functions work for both data
     )
     testthat::expect_true(nrow(mass_matches) > 0)
     testthat::expect_true(any(toupper(trimws(mass_matches$InChIKey)) == ref_key))
-
-    isotopologue_candidates <- isotopologue_mass_filter(
-      mz = isotopologue_mz,
-      mz_ppm = 10,
-      adduct = "M+H",
-      database = database_name
-    )
-    testthat::expect_true(nrow(isotopologue_candidates) > 0)
-    testthat::expect_true(any(toupper(trimws(isotopologue_candidates$InChIKey)) == ref_key))
+    testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(mass_matches)))
 
     isotopologue_matches <- isotopologue_mass_match(
       unknown_feature = tibble::tibble(mz = isotopologue_mz, time = 1),
@@ -133,6 +124,86 @@ testthat::test_that("mass and isotopologue matching functions work for both data
     )
     testthat::expect_true(nrow(isotopologue_matches) > 0)
     testthat::expect_true(any(toupper(trimws(isotopologue_matches$InChIKey)) == ref_key))
+    testthat::expect_false(any(c("Exact_mass", "Exact_mass_most_abundant_isotopologue") %in% colnames(isotopologue_matches)))
+  }
+})
+
+testthat::test_that("package-level matching defaults align with explicit broad prefiltering", {
+  testthat::skip_if_not_installed("arrow")
+  testthat::skip_if_not_installed("dplyr")
+  testthat::skip_if_not_installed("MetaboCoreUtilsAdduct")
+  testthat::skip_if_not_installed("tibble")
+
+  for (database_name in c("metorigindb", "pubchem")) {
+    reference <- massmatcher:::metabolite_database_loading(database = database_name) |>
+      dplyr::filter(
+        !is.na(.data$InChIKey),
+        .data$Charge_natural == 0,
+        !is.na(.data$Exact_mass),
+        !is.na(.data$Exact_mass_most_abundant_isotopologue)
+      ) |>
+      dplyr::select(InChIKey, Exact_mass, Exact_mass_most_abundant_isotopologue) |>
+      utils::head(1) |>
+      dplyr::collect()
+
+    if (nrow(reference) == 0) {
+      testthat::skip(paste0("No neutral reference molecule available in ", database_name, "."))
+    }
+
+    ref_key <- toupper(trimws(reference$InChIKey[[1]]))
+    mono_mz <- massmatcher:::mass2mz_df_safe(
+      mass = reference$Exact_mass[[1]],
+      adduct = "M+H"
+    )$mz[[1]]
+    isotopologue_mz <- massmatcher:::mass2mz_df_safe(
+      mass = reference$Exact_mass_most_abundant_isotopologue[[1]],
+      adduct = "M+H"
+    )$mz[[1]]
+
+    mono_prefiltered <- prefilter_metabolite_database_by_mz_range(
+      mz_values = mono_mz,
+      adducts = "M+H",
+      ppm_threshold = 10,
+      database = database_name
+    )
+    mono_default <- mass_match(
+      unknown_feature = tibble::tibble(mz = mono_mz, time = 1),
+      mz_ppm = 10,
+      adduct = "M+H",
+      database = database_name
+    )
+    mono_explicit <- mass_match(
+      unknown_feature = tibble::tibble(mz = mono_mz, time = 1),
+      mz_ppm = 10,
+      adduct = "M+H",
+      database = database_name,
+      metabolite_database = mono_prefiltered
+    )
+
+    iso_prefiltered <- prefilter_metabolite_database_by_mz_range(
+      mz_values = isotopologue_mz,
+      adducts = "M+H",
+      ppm_threshold = 10,
+      database = database_name
+    )
+    iso_default <- isotopologue_mass_match(
+      unknown_feature = tibble::tibble(mz = isotopologue_mz, time = 1),
+      mz_ppm = 10,
+      adduct = "M+H",
+      database = database_name
+    )
+    iso_explicit <- isotopologue_mass_match(
+      unknown_feature = tibble::tibble(mz = isotopologue_mz, time = 1),
+      mz_ppm = 10,
+      adduct = "M+H",
+      database = database_name,
+      metabolite_database = iso_prefiltered
+    )
+
+    testthat::expect_true(any(toupper(trimws(mono_default$InChIKey)) == ref_key))
+    testthat::expect_true(any(toupper(trimws(mono_explicit$InChIKey)) == ref_key))
+    testthat::expect_true(any(toupper(trimws(iso_default$InChIKey)) == ref_key))
+    testthat::expect_true(any(toupper(trimws(iso_explicit$InChIKey)) == ref_key))
   }
 })
 

@@ -27,7 +27,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
     toupper(trimws(as.character(x)))
   }
 
-  classification_template = tibble(
+  classification_template = tibble::tibble(
     InChIKey = character(),
     Kingdom = character(),
     Superclass = character(),
@@ -65,7 +65,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
       # Check if the classification object is NULL
       if (is.null(classif)) {
         # Return original InChIKey with NA values for classification fields
-        return(tibble(
+        return(tibble::tibble(
           InChIKey = orig_inchikey,
           Kingdom = NA_character_,
           Superclass = NA_character_,
@@ -133,7 +133,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
       }
 
       # Return a tibble with the extracted information
-      tibble(
+      tibble::tibble(
         InChIKey = inchikey,
         Kingdom = kingdom,
         Superclass = superclass,
@@ -243,7 +243,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
     }
 
     missing_keys <- setdiff(unique_inchikey, cached_classification_df_final$InChIKey)
-    missing_df = tibble(
+    missing_df = tibble::tibble(
       InChIKey = missing_keys,
       Kingdom = rep(NA_character_, length(missing_keys)),
       Superclass = rep(NA_character_, length(missing_keys)),
@@ -267,7 +267,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
   report_status(paste0("Classifying ", n_iter, " chemicals via ClassyFire API..."))
   report_progress(2L, progress_total, paste0("Classifying ", n_iter, " chemicals via ClassyFire API"))
 
-  pb <- txtProgressBar(min = 0, max = n_iter, style = 3)
+  pb <- utils::txtProgressBar(min = 0, max = n_iter, style = 3)
   pubchem_classification_List <- vector("list", n_iter)
 
   for (i in seq_len(n_iter)) {
@@ -281,7 +281,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
       get_classification(current_inchikey),
       error = function(e) NULL
     )
-    setTxtProgressBar(pb, i)
+    utils::setTxtProgressBar(pb, i)
   }
 
   close(pb)
@@ -312,7 +312,7 @@ get_chemical_classification = function(unique_inchikey, query_missing = TRUE, da
     dplyr::distinct(InChIKey, .keep_all = TRUE)
 
   missing_keys <- setdiff(unique_inchikey, combined_df$InChIKey)
-  missing_df = tibble(
+  missing_df = tibble::tibble(
     InChIKey = missing_keys,
     Kingdom = rep(NA_character_, length(missing_keys)),
     Superclass = rep(NA_character_, length(missing_keys)),

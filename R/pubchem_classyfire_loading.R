@@ -5,13 +5,14 @@
 #' @return an `arrow::Dataset`
 #' @export 
 pubchem_classyfire_loading <- function() {
-  parquet_path <- system.file("classyfire", "pubchem_classyfire-0.parquet", package = "massmatcher")
-  if (parquet_path == "") {
-    repo_path <- file.path(getwd(), "massmatcher", "inst", "classyfire", "pubchem_classyfire-0.parquet")
-    if (!file.exists(repo_path)) {
-      stop("Could not locate pubchem_classyfire-0.parquet in the installed package or the current repository checkout.")
-    }
-    parquet_path <- repo_path
+  parquet_candidates <- massmatcher_inst_file_candidates("classyfire", "pubchem_classyfire-0.parquet")
+  parquet_path <- parquet_candidates[file.exists(parquet_candidates)][1]
+  if (is.na(parquet_path)) {
+    stop(
+      "Could not locate pubchem_classyfire-0.parquet. Checked: ",
+      paste(parquet_candidates, collapse = ", "),
+      call. = FALSE
+    )
   }
 
   cache_key <- paste0(
